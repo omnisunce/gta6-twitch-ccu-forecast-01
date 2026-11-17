@@ -35,15 +35,13 @@ Mixing them in drags the median up late in the day and wrecks the early
 hours. Console-only launches are the family GTA VI belongs to -- PS5 and
 Xbox only, no PC until 2027, single-player, rolling midnight unlock -- so
 they are the training set. On those launches, leave-one-out, this median
-shape scores about 0.155 log-pinball in leave-one-out on the console-only
+shape scores about 0.16 log-pinball in leave-one-out on the console-only
 family against about 0.35 for the flat persistence baseline, with a
 typical median miss near 29% instead of 73%. On the practice cases the
-first version scored 0.252 (rank 2221) and the second 0.192 (rank 946),
-beating the house baseline's 0.387 but still far from the leaders near
-0.12; the size weighting and the pre-launch-peak adjustment are the
-response to that, and they also improve leave-one-out on every
-comparable launch, not only the console-only ones (about 0.63 against
-about 0.85 for the unadjusted centre).
+first version scored 0.252 (rank 2221), the second 0.192 (rank 946),
+and the third 0.197 (rank 1163): the third only narrowed the band and
+softened the a-scaling, and the narrower band under-covered, so this
+version keeps the softer a-scaling but restores the wider band.
 
 The program is deterministic (sorted inputs, trimmed means, no randomness, no
 clock, no network) and standard library only. It reads every *.in file in
@@ -68,12 +66,12 @@ OUTPUT_DIR = Path(os.environ.get("MAKEFUN_OUTPUT_DIR", "/output"))
 LEVELS = [0.05, 0.25, 0.5, 0.75, 0.95]
 # Standard normal quantiles at the five levels above.
 Z = [-1.645, -0.674, 0.0, 0.674, 1.645]
-# Log spread of the quantile band around the median curve. Fixed at 0.35:
-# with the size-weighted, a-scaled centre the remaining disagreement
-# between launches is smaller, and a narrower band keeps 90% coverage
-# near 0.94 in leave-one-out on the console-only family while a wider
-# one over-covers and costs pinball loss.
-SIGMA = 0.35
+# Log spread of the quantile band around the median curve. Back to 0.45:
+# the 0.35 trial (v3) scored worse on the practice cases (0.197 vs
+# 0.192) with 90% coverage falling to 0.86, so the narrower band was
+# over-confident on the real practice games even though leave-one-out
+# preferred it.
+SIGMA = 0.45
 # A comparable only counts if its launch day is this complete.
 MIN_DAY_HOURS = 20
 
