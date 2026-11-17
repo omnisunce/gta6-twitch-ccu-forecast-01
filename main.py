@@ -20,7 +20,7 @@ the biggest hourly audience in the 14 days before launch day: a launch
 whose hour 1 already sits near its pre-launch peak has little room left
 to climb, while one whose hour 1 is a small fraction of that peak can
 multiply several times. Only the rising part of the curve is scaled, by
-(a_target / a_training-median) ** -0.4, so a low-a target gets a bigger
+(a_target / a_training-median) ** -0.3, so a low-a target gets a bigger
 rise and a high-a target a flatter one. The centre is smoothed over
 neighbouring hours (the US unlock lands at 04:00Z in daylight-saving months and 05:00Z
 in November, so a sharp step at one hour would be a coin flip), and the
@@ -35,15 +35,15 @@ Mixing them in drags the median up late in the day and wrecks the early
 hours. Console-only launches are the family GTA VI belongs to -- PS5 and
 Xbox only, no PC until 2027, single-player, rolling midnight unlock -- so
 they are the training set. On those launches, leave-one-out, this median
-shape scores about 0.17 log-pinball in leave-one-out on the console-only
+shape scores about 0.155 log-pinball in leave-one-out on the console-only
 family against about 0.35 for the flat persistence baseline, with a
-typical median miss near 30% instead of 73%. On the practice cases the
-first version scored 0.252 (rank 2221), beating the house baseline's
-0.387 but far from the leaders near 0.12; the size weighting and the
-pre-launch-peak adjustment are the response to that, and they also
-improve leave-one-out on every comparable launch, not only the
-console-only ones (about 0.63 against about 0.85 for the unadjusted
-centre).
+typical median miss near 29% instead of 73%. On the practice cases the
+first version scored 0.252 (rank 2221) and the second 0.192 (rank 946),
+beating the house baseline's 0.387 but still far from the leaders near
+0.12; the size weighting and the pre-launch-peak adjustment are the
+response to that, and they also improve leave-one-out on every
+comparable launch, not only the console-only ones (about 0.63 against
+about 0.85 for the unadjusted centre).
 
 The program is deterministic (sorted inputs, trimmed means, no randomness, no
 clock, no network) and standard library only. It reads every *.in file in
@@ -68,11 +68,12 @@ OUTPUT_DIR = Path(os.environ.get("MAKEFUN_OUTPUT_DIR", "/output"))
 LEVELS = [0.05, 0.25, 0.5, 0.75, 0.95]
 # Standard normal quantiles at the five levels above.
 Z = [-1.645, -0.674, 0.0, 0.674, 1.645]
-# Log spread of the quantile band around the median curve. Fixed at 0.45:
-# in the console-only training family the spread of log-ratios across
-# launches is about 0.35-0.48 late in the day, and a band that wide keeps
-# 90% coverage near 0.87 in leave-one-out while a narrower one collapses.
-SIGMA = 0.45
+# Log spread of the quantile band around the median curve. Fixed at 0.35:
+# with the size-weighted, a-scaled centre the remaining disagreement
+# between launches is smaller, and a narrower band keeps 90% coverage
+# near 0.94 in leave-one-out on the console-only family while a wider
+# one over-covers and costs pinball loss.
+SIGMA = 0.35
 # A comparable only counts if its launch day is this complete.
 MIN_DAY_HOURS = 20
 
@@ -296,7 +297,7 @@ def forecast_case(case):
             a_target = p1 / peak
     scale = 1.0
     if a_target is not None and a_ref is not None and a_ref > 0:
-        scale = (a_target / a_ref) ** -0.4
+        scale = (a_target / a_ref) ** -0.3
     hours = []
     for row in case.get("forecast") or []:
         hour = int(row["hour"])
