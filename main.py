@@ -10,9 +10,11 @@ visible in the case file itself: every case ships the hourly curves of past
 big launches ("comparables"). This program reads those curves at run time,
 keeps only the ones that look like GTA VI -- console-only launches with no
 PC version and no early-access contamination -- and, for each forecast hour,
-takes the median log-ratio of that hour's viewers to the launch's own hour-1
-viewers across those launches. The median is smoothed over neighbouring
-hours (the US unlock lands at 04:00Z in daylight-saving months and 05:00Z
+takes the trimmed mean log-ratio of that hour's viewers to the launch's own
+hour-1 viewers across those launches (the lowest and highest ratio dropped
+first, so one wild launch cannot drag the centre, but the other launches
+still vote instead of only the middle one doing so). The centre is smoothed
+over neighbouring hours (the US unlock lands at 04:00Z in daylight-saving months and 05:00Z
 in November, so a sharp step at one hour would be a coin flip), and the
 five quantiles are a log-normal band around that median with a fixed
 spread of 0.45 log units, wide enough to cover how much launches disagree
@@ -25,10 +27,10 @@ Mixing them in drags the median up late in the day and wrecks the early
 hours. Console-only launches are the family GTA VI belongs to -- PS5 and
 Xbox only, no PC until 2027, single-player, rolling midnight unlock -- so
 they are the training set. On those launches, leave-one-out, this median
-shape scores about 0.22 log-pinball against about 0.34 for the flat
-persistence baseline, with a typical median miss near 43% instead of 73%.
+shape scores about 0.21 log-pinball against about 0.34 for the flat
+persistence baseline, with a typical median miss near 42% instead of 73%.
 
-The program is deterministic (sorted inputs, medians, no randomness, no
+The program is deterministic (sorted inputs, trimmed means, no randomness, no
 clock, no network) and standard library only. It reads every *.in file in
 MAKEFUN_INPUT_DIR (default /input) and writes <id>.out to
 MAKEFUN_OUTPUT_DIR (default /output) with 23 rows, hours 2..24, five
@@ -140,28 +142,37 @@ def select_training(comparables):
     return family or curves
 
 
-def median_log_ratios(training):
-    """Median log-ratio ln(viewers_h / viewers_0) per day-hour offset.
+def centre_log_ratios(training):
+    """Trimmed-mean log-ratio ln(viewers_h / viewers_0) per day-hour offset.
 
-    Returns a dict offset -> median, for offsets 1..23 that at least
-    three training launches cover.
+    For each offset, drop the lowest and highest log-ratio across the
+    training launches (when at least five cover it), then average the
+    rest. A plain median throws away every launch but the middle one;
+    a plain mean lets one wild launch drag the centre. The trimmed
+    mean keeps most of the information while staying robust, and in
+    leave-one-out on the console-only family it scores about 0.210
+    against about 0.216 for the median. Returns a dict offset -> centre,
+    for offsets 1..23 that at least three training launches cover.
     """
-    medians = {}
+    centres = {}
     for offset in range(1, 24):
-        ratios = []
-        for _comparable, hours in training:
-            if offset in hours:
-                ratios.append(math.log(hours[offset] / hours[0]))
+        ratios = sorted(
+            math.log(hours[offset] / hours[0])
+            for _comparable, hours in training
+            if offset in hours
+        )
         if len(ratios) >= 3:
-            medians[offset] = statistics.median(ratios)
-    return medians
+            if len(ratios) >= 5:
+                ratios = ratios[1:-1]
+            centres[offset] = statistics.mean(ratios)
+    return centres
 
 
 def smoothed_median(medians, offset):
-    """Median at one offset, smoothed over its neighbouring hours.
+    """Centre at one offset, smoothed over its neighbouring hours.
 
     Weights 0.25 / 0.5 / 0.25 over (offset-1, offset, offset+1) where
-    those medians exist. This spreads the US-unlock step, which lands
+    those centres exist. This spreads the US-unlock step, which lands
     an hour apart in daylight-saving and standard-time months, instead
     of betting the whole step on a single hour.
     """
@@ -198,12 +209,12 @@ def forecast_case(case):
         raise ValueError("case has no hour-1 print")
     p1 = max(1.0, float(first["viewers"]))
     training = select_training(case.get("comparables"))
-    medians = median_log_ratios(training)
+    centres = centre_log_ratios(training)
     hours = []
     for row in case.get("forecast") or []:
         hour = int(row["hour"])
         offset = hour - 1
-        log_median = smoothed_median(medians, offset)
+        log_median = smoothed_median(centres, offset)
         hours.append({"hour": hour, "q": hour_quantiles(p1, log_median)})
     hours.sort(key=lambda r: r["hour"])
     return {"hours": hours}
