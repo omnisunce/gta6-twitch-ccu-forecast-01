@@ -10,11 +10,19 @@ visible in the case file itself: every case ships the hourly curves of past
 big launches ("comparables"). This program reads those curves at run time,
 keeps only the ones that look like GTA VI -- console-only launches with no
 PC version and no early-access contamination -- and, for each forecast hour,
-takes the trimmed mean log-ratio of that hour's viewers to the launch's own
-hour-1 viewers across those launches (the lowest and highest ratio dropped
-first, so one wild launch cannot drag the centre, but the other launches
-still vote instead of only the middle one doing so). The centre is smoothed
-over neighbouring hours (the US unlock lands at 04:00Z in daylight-saving months and 05:00Z
+takes the size-weighted mean log-ratio of that hour's viewers to the
+launch's own hour-1 viewers across those launches: a training launch
+counts more when its own hour-1 print is close in size to the target's,
+because small launches rise much further than big ones do, and the
+centre is then adjusted for how much of its audience was already
+watching before launch. The adjustment uses the ratio a = hour-1 print /
+the biggest hourly audience in the 14 days before launch day: a launch
+whose hour 1 already sits near its pre-launch peak has little room left
+to climb, while one whose hour 1 is a small fraction of that peak can
+multiply several times. Only the rising part of the curve is scaled, by
+(a_target / a_training-median) ** -0.4, so a low-a target gets a bigger
+rise and a high-a target a flatter one. The centre is smoothed over
+neighbouring hours (the US unlock lands at 04:00Z in daylight-saving months and 05:00Z
 in November, so a sharp step at one hour would be a coin flip), and the
 five quantiles are a log-normal band around that median with a fixed
 spread of 0.45 log units, wide enough to cover how much launches disagree
@@ -27,8 +35,15 @@ Mixing them in drags the median up late in the day and wrecks the early
 hours. Console-only launches are the family GTA VI belongs to -- PS5 and
 Xbox only, no PC until 2027, single-player, rolling midnight unlock -- so
 they are the training set. On those launches, leave-one-out, this median
-shape scores about 0.21 log-pinball against about 0.34 for the flat
-persistence baseline, with a typical median miss near 42% instead of 73%.
+shape scores about 0.17 log-pinball in leave-one-out on the console-only
+family against about 0.35 for the flat persistence baseline, with a
+typical median miss near 30% instead of 73%. On the practice cases the
+first version scored 0.252 (rank 2221), beating the house baseline's
+0.387 but far from the leaders near 0.12; the size weighting and the
+pre-launch-peak adjustment are the response to that, and they also
+improve leave-one-out on every comparable launch, not only the
+console-only ones (about 0.63 against about 0.85 for the unadjusted
+centre).
 
 The program is deterministic (sorted inputs, trimmed means, no randomness, no
 clock, no network) and standard library only. It reads every *.in file in
@@ -142,30 +157,89 @@ def select_training(comparables):
     return family or curves
 
 
-def centre_log_ratios(training):
-    """Trimmed-mean log-ratio ln(viewers_h / viewers_0) per day-hour offset.
+def pre_peak_ratio(day_start, rows):
+    """Biggest hourly audience before launch day, or None if there is none.
 
-    For each offset, drop the lowest and highest log-ratio across the
-    training launches (when at least five cover it), then average the
-    rest. A plain median throws away every launch but the middle one;
-    a plain mean lets one wild launch drag the centre. The trimmed
-    mean keeps most of the information while staying robust, and in
-    leave-one-out on the console-only family it scores about 0.210
-    against about 0.216 for the median. Returns a dict offset -> centre,
-    for offsets 1..23 that at least three training launches cover.
+    `rows` are hourly points with "from" and "viewers" (a comparable's
+    "hourly" list, or the case's "history_hourly"). Only points before
+    day_start count, so the hour-1 print itself is never the peak.
     """
+    peak = 0.0
+    for row in rows or []:
+        try:
+            when = parse_time(row["from"])
+            viewers = float(row["viewers"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if when < day_start and viewers > peak:
+            peak = viewers
+    return peak if peak > 0 else None
+
+
+def comparable_a(comparable):
+    """a = hour-1 print / biggest pre-launch hourly audience, for one launch."""
+    hours = day_hours(comparable)
+    if 0 not in hours:
+        return None
+    peak = pre_peak_ratio(parse_time(comparable["day_start"]),
+                          comparable.get("hourly") or [])
+    if peak is None:
+        return None
+    return hours[0] / peak
+
+
+def weighted_centre(training, p1, offset):
+    """Size-weighted mean log-ratio ln(viewers_h / viewers_0) at one offset.
+
+    Each training launch is weighted by exp(-|ln(p1_launch / p1_target)|):
+    launches about the target's size count most, launches ten times
+    bigger or smaller count about a third as much. Small launches rise
+    several-fold on their launch day while big ones barely double, so
+    an unweighted centre overstates the rise for a big target and
+    understates it for a small one. Returns None when fewer than three
+    training launches cover the offset.
+    """
+    total = 0.0
+    weight_sum = 0.0
+    count = 0
+    for _comparable, hours in training:
+        if offset not in hours:
+            continue
+        weight = math.exp(-abs(math.log(hours[0] / p1)))
+        total += weight * math.log(hours[offset] / hours[0])
+        weight_sum += weight
+        count += 1
+    if count < 3 or weight_sum == 0.0:
+        return None
+    return total / weight_sum
+
+
+def centre_log_ratios(training, p1):
+    """Weighted log-ratio centre per day-hour offset, smoothed.
+
+    Returns (centres, a_ref): centres maps offset 1..23 to the
+    size-weighted mean log-ratio, smoothed over neighbouring hours
+    (0.25 / 0.5 / 0.25), and a_ref is the median a of the training
+    launches (None when no training launch has a pre-launch peak).
+    The caller scales the rising part of the curve by the target's
+    own a against a_ref; this function only prepares the centre.
+    """
+    a_values = []
+    for comparable, _hours in training:
+        a = comparable_a(comparable)
+        if a is not None:
+            a_values.append(a)
+    a_ref = statistics.median(a_values) if a_values else None
+    raw = {}
+    for offset in range(1, 24):
+        centre = weighted_centre(training, p1, offset)
+        if centre is not None:
+            raw[offset] = centre
     centres = {}
     for offset in range(1, 24):
-        ratios = sorted(
-            math.log(hours[offset] / hours[0])
-            for _comparable, hours in training
-            if offset in hours
-        )
-        if len(ratios) >= 3:
-            if len(ratios) >= 5:
-                ratios = ratios[1:-1]
-            centres[offset] = statistics.mean(ratios)
-    return centres
+        if offset in raw:
+            centres[offset] = smoothed_median(raw, offset)
+    return centres, a_ref
 
 
 def smoothed_median(medians, offset):
@@ -209,12 +283,27 @@ def forecast_case(case):
         raise ValueError("case has no hour-1 print")
     p1 = max(1.0, float(first["viewers"]))
     training = select_training(case.get("comparables"))
-    centres = centre_log_ratios(training)
+    centres, a_ref = centre_log_ratios(training, p1)
+    # The target's own a, from its pre-launch hourly history: hour 1's
+    # print over the biggest hourly audience in the 14 days before its
+    # launch day. When the history is missing, the factor stays 1.
+    a_target = None
+    day_start = case.get("day_start")
+    if day_start:
+        peak = pre_peak_ratio(parse_time(day_start),
+                              case.get("history_hourly") or [])
+        if peak is not None:
+            a_target = p1 / peak
+    scale = 1.0
+    if a_target is not None and a_ref is not None and a_ref > 0:
+        scale = (a_target / a_ref) ** -0.4
     hours = []
     for row in case.get("forecast") or []:
         hour = int(row["hour"])
         offset = hour - 1
-        log_median = smoothed_median(centres, offset)
+        log_median = centres.get(offset, 0.0)
+        if log_median > 0.0:
+            log_median *= scale
         hours.append({"hour": hour, "q": hour_quantiles(p1, log_median)})
     hours.sort(key=lambda r: r["hour"])
     return {"hours": hours}
